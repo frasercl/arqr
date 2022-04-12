@@ -2,11 +2,11 @@ use std::{iter, slice};
 use crate::bitmap::Bitmap;
 
 #[derive(Clone, Copy, Debug, Default)]
-pub struct GridLine {
-    pub x: usize,
-    pub y: usize,
-    pub p2: usize,
-    pub vert: bool,
+pub struct Target {
+    pub x_min: usize,
+    pub y_min: usize,
+    pub x_max: usize,
+    pub y_max: usize,
 }
 
 // A dead simple fixed-length circular buffer
@@ -55,20 +55,20 @@ impl<T: Copy + Default, const N: usize> FixedBuffer<T, N> {
 }
 
 const TARGET_RATIOS: [f32; 4] = [1.0, 1.0/3.0, 3.0, 1.0];
-const TARGET_THRESH: f32 = 0.4;
+const TARGET_THRESH: f32 = 0.5;
 
 #[inline]
-fn confirm_position_target(img: &Bitmap, point: GridLine) -> Option<GridLine> {
-    let line_length = point.p2 - point.x;
-    let center_x = point.x + line_length / 2;
-    let width = img.width() as usize;
-    let point_idx = point.y * width + center_x;
-    let max = line_length * width;
+fn confirm_pos_target(img: &Bitmap, x_min: usize, x_max: usize, y: usize) -> Option<Target> {
+    let target_width = x_max - x_min;
+    let center_x = x_min + target_width / 2;
+    let img_width = img.width() as usize;
+    let point_idx = y * img_width + center_x;
+    let max = target_width * img_width;
 
     let mut size_buf = [0; 5];
     let mut size_idx = 2;
     let mut color = false;
-    let mut y_min = point.y;
+    let mut y_min = y;
 
     // Iterate up, count the size of black & white chunks
     let max_up = if max > point_idx {
@@ -76,7 +76,7 @@ fn confirm_position_target(img: &Bitmap, point: GridLine) -> Option<GridLine> {
     } else {
         point_idx - max
     };
-    for &px in img[max_up..point_idx].iter().rev().step_by(width) {
+    for &px in img[max_up..point_idx].iter().rev().step_by(img_width) {
         if px != color {
             color = px;
             if size_idx == 0 { break; }
@@ -88,15 +88,15 @@ fn confirm_position_target(img: &Bitmap, point: GridLine) -> Option<GridLine> {
 
     size_idx = 2;
     color = false;
-    let mut y_max = point.y;
+    let mut y_max = y;
 
     // Iterate down, count the size of black and white chunks
     let max_down = if max > img.len() - point_idx {
-        img.len() - (width - center_x)
+        img.len() - (img_width - center_x)
     } else {
         point_idx + max
     };
-    for &px in img[point_idx..max_down].iter().step_by(width) {
+    for &px in img[point_idx..max_down].iter().step_by(img_width) {
         if px != color {
             color = px;
             if size_idx == 4 { break; }
@@ -106,7 +106,7 @@ fn confirm_position_target(img: &Bitmap, point: GridLine) -> Option<GridLine> {
         y_max += 1;
     }
 
-    // nasty iterator crimes
+    // fun with iterators (calculate chunk size ratios & confirm they match)
     let is_pattern = size_buf
         .windows(2)
         .map(|win| win[0] as f32 / win[1] as f32)
@@ -117,142 +117,93 @@ fn confirm_position_target(img: &Bitmap, point: GridLine) -> Option<GridLine> {
         });
 
     if is_pattern {
-        Some(GridLine {
-            x: center_x,
-            y: y_min,
-            p2: y_max,
-            vert: true
-        })
+        Some(Target{x_min, y_min, x_max, y_max})
     } else { None }
 }
 
-pub fn find_position_targets(img: &Bitmap) -> Vec<GridLine> {
+pub fn find_pos_targets(img: &Bitmap) -> Vec<Target> {
+    // Stores the ratios of sizes of successive chunks of pixels
     let mut ratio_buf = FixedBuffer::<f32, 4>::new();
+    // Stores the x-coords of the last few chunk edges
     let mut x_buf = FixedBuffer::<usize, 6>::new();
-    let mut result = Vec::new();
+    // Holds any targets we find
+    let mut targets = Vec::new();
+    // Tracks targets that are in danger of being re-scanned
+    let mut active_targets = Vec::new();
 
     for (y, row) in img.rows().enumerate().step_by(4) {
-        let mut chunk_color = false;
-        let mut count = 0;
-        let mut last_count = 0;
+        let mut enum_row = row.enumerate();
+        let (_, &(mut chunk_color)) = enum_row.next().unwrap();
+        let mut last_count = 1;
+        // advance through the first chunk and save its size in last_count
+        while let Some((_, &px)) = enum_row.next() {
+            if px != chunk_color { break; }
+            last_count += 1;
+        }
+        let mut count = 1; // count size of current chunk of black/white
 
-        for (x, &px) in row.enumerate() {
+        x_buf.push(last_count);
+        chunk_color = !chunk_color;
+
+        for (x, &px) in enum_row {
             if px != chunk_color {
                 chunk_color = px;
 
                 x_buf.push(x);
-                if last_count > 0 {
-                    ratio_buf.push(last_count as f32 / count as f32);
-                }
+                ratio_buf.push(last_count as f32 / count as f32);
 
                 last_count = count;
-                count = 0;
-
-                if chunk_color && ratio_buf.is_full() {
-                    let is_pattern = ratio_buf
-                        .iter()
-                        .zip(TARGET_RATIOS.iter())
-                        .all(|(ratio, target)| {
-                            let off_by = ratio - target;
-                            -TARGET_THRESH < off_by && off_by < TARGET_THRESH
-                        });
-
-                    if is_pattern {
-                        let start_x = x_buf.peek_back();
-                        let point = GridLine { x: start_x, y, p2: x, vert: false };
-                        result.push(point);
-
-                        if let Some(v_line) = confirm_position_target(img, point) {
-                            result.push(v_line);
-                        }
-                    }
+                count = 1;
+                // check that we've just moved from black to white
+                // and have enough chunks for a pattern
+                if !chunk_color || !ratio_buf.is_full() {
+                    continue;
                 }
+
+                // check that this pattern isn't within any active targets
+                let start_x = x_buf.peek_back();
+                let outside = |&i| {
+                    let t: Target = targets[i];
+                    x < t.x_min || start_x > t.x_max
+                };
+                if !active_targets.iter().all(outside) {
+                    continue;
+                }
+
+                // now test if this pattern matches the shape of a target
+                let is_pattern = ratio_buf
+                    .iter()
+                    .zip(TARGET_RATIOS.iter())
+                    .all(|(ratio, target)| {
+                        let off_by = ratio - target;
+                        -TARGET_THRESH < off_by && off_by < TARGET_THRESH
+                    });
+                if !is_pattern {
+                    continue;
+                }
+
+                if let Some(target) = confirm_pos_target(img, start_x, x, y) {
+                    active_targets.push(targets.len());
+                    targets.push(target);
+                }
+                
+            } else {
+                count += 1;
             }
-            count += 1;
         }
+
+        // clear out any active targets that we're now entirely below
+        let mut ati = 0;
+        while ati < active_targets.len() {
+            if y > targets[active_targets[ati]].y_max {
+                active_targets.swap_remove(ati);
+            } else {
+                ati += 1;
+            }
+        }
+
         ratio_buf.clear();
         x_buf.clear();
     }
-    result
-}
-
-#[cfg(test)]
-mod tests {
-    use super::FixedBuffer;
-
-    fn buffer_from<T, const N: usize>(contents: &Vec<T>) -> FixedBuffer<T, N>
-    where
-        T: Copy + Default,
-    {
-        let mut buf = FixedBuffer::<T, N>::new();
-        contents.iter().for_each(|&n| buf.push(n));
-        buf
-    }
-
-    #[test]
-    fn buffer_not_full() {
-        let buf = buffer_from::<u32, 4>(&vec![1, 2, 3]);
-        assert!(!buf.is_full());
-    }
-
-    #[test]
-    fn buffer_is_full() {
-        let buf = buffer_from::<u32, 4>(&vec![1, 2, 3, 4]);
-        assert!(buf.is_full());
-    }
-
-    #[test]
-    fn buffer_iter_stops_at_len() {
-        let buf = buffer_from::<u32, 4>(&vec![1, 2, 3]);
-        assert_eq!(buf.iter().count(), 3);
-    }
-
-    #[test]
-    fn buffer_values_wrap() {
-        let buf = buffer_from::<u32, 4>(&vec![1, 2, 3, 4, 5, 6]);
-        // println!("{:?}", buf);
-        // println!("{:?}", buf.iter().collect::<Vec<_>>());
-        let mut iter = buf.iter();
-        assert_eq!(iter.next(), Some(&3));
-        assert_eq!(iter.next(), Some(&4));
-        assert_eq!(iter.next(), Some(&5));
-        assert_eq!(iter.next(), Some(&6));
-        assert_eq!(iter.next(), None);
-    }
-
-    #[test]
-    fn buffer_can_be_reused() {
-        let mut buf = buffer_from::<u32, 4>(&vec![1, 2, 3, 4, 5, 6]);
-        buf.clear();
-        [7, 8, 9].into_iter().for_each(|n| buf.push(n));
-        // println!("{:?}", buf);
-        // println!("{:?}", buf.iter().collect::<Vec<_>>());
-        let mut iter = buf.iter();
-        assert_eq!(iter.next(), Some(&7));
-        assert_eq!(iter.next(), Some(&8));
-        assert_eq!(iter.next(), Some(&9));
-        assert_eq!(iter.next(), None);
-    }
-
-    #[test]
-    fn buffer_peek_not_full() {
-        let buf = buffer_from::<u32, 4>(&vec![1, 2, 3]);
-        assert_eq!(buf.peek_back(), 1); 
-    }
-
-    #[test]
-    fn buffer_peek_full() {
-        let buf = buffer_from::<u32, 4>(&vec![1, 2, 3, 4, 5]);
-        assert_eq!(buf.peek_back(), 2);
-    }
-
-    // use image::io::Reader as ImageReader;
-    // #[test]
-    // fn finds_test_target() {
-    //     let img = ImageReader::open("assets/test_target.png")
-    //         .unwrap().decode().unwrap();
-    //     let targets = find_position_targets(img.to_luma8());
-    //     println!("{:?}", targets);
-    //     assert_ne!(targets.iter().count(), 0);
-    // }
+    targets
 }

@@ -1,6 +1,6 @@
 
 use std::{
-    ops::{Deref, DerefMut, Index},
+    ops::{Deref, DerefMut},
     slice,
 };
 use image::{ImageBuffer, Pixel};
@@ -20,6 +20,7 @@ where
     histo
 }
 
+// From "A Simple and Efficient Image Pre-processing for QR Decoder" (Chen, Yang, & Zhang)
 fn u8_histo_to_threshold(histo: U8Histo) -> u8 {
     let mut thresh: usize = 0x80;
 
@@ -64,6 +65,7 @@ fn u8_histo_to_threshold(histo: U8Histo) -> u8 {
 }
 
 /// Discount ImageBuffer for bools
+#[derive(Clone, Debug, Default)]
 pub struct Bitmap {
     data: Vec<bool>,
     width: u32,
@@ -114,14 +116,6 @@ impl Deref for Bitmap {
     }
 }
 
-// impl Index<usize> for Bitmap {
-//     type Output = [bool];
-//     fn index(&self, index: usize) -> &Self::Output {
-//         let start = index * self.width as usize;
-//         &self.data[start..(start + self.width as usize)]
-//     }
-// }
-
 pub struct Rows<'a>(slice::ChunksExact<'a, bool>);
 
 impl<'a> Iterator for Rows<'a> {
@@ -162,9 +156,3 @@ impl DoubleEndedIterator for Rows<'_> {
         Some(self.0.nth_back(n)?.iter())
     }
 }
-
-// pub struct Column<'a>(std::iter::StepBy<slice::Iter<bool>>);
-
-// impl Iterator for Column<'_> {
-
-// }

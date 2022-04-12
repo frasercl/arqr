@@ -9,25 +9,14 @@ use piston_window::{
     WindowSettings,
 };
 use arqr::{
-    target::{find_position_targets, GridLine}, 
+    target::find_pos_targets, 
     bitmap::Bitmap, 
-    filter,
+    // filter,
 };
 
-const FPS: u32 = 15;
-const SCAN_INTERVAL: u32 = 3;
+const FPS: u32 = 30;
+const SCAN_INTERVAL: u32 = 2;
 const LINE_COLOR: [f32; 4] = [0.0, 1.0, 0.0, 1.0]; // green
-
-fn gridline_to_piston_line(line: GridLine) -> [f64; 4] {
-    let x = line.x as f64;
-    let y = line.y as f64;
-    let p2 = line.p2 as f64;
-    if line.vert {
-        [x, y, x, p2]
-    } else {
-        [x, y, p2, y]
-    }
-}
 
 fn main() {
     let mut cam = Camera::new(0, None).unwrap();
@@ -64,12 +53,12 @@ fn main() {
             let frame = scan_recver.recv();
             if frame.is_err() { break; }
             let bmp = Bitmap::from_u8_img_dynamic(&frame.unwrap());
-            let targets = find_position_targets(&bmp);
+            let targets = find_pos_targets(&bmp);
             send_result = result_sender.send(targets);
         }
     });
 
-    // meanwhile, this thread draws the camera feed and scan results
+    // meanwhile, main thread draws the camera feed and scan results
     let mut window: PistonWindow = WindowSettings::new("QR", [res.width(), res.height()])
         .exit_on_esc(true)
         .build()
@@ -86,19 +75,20 @@ fn main() {
         }
 
         if let Ok(targets) = result_recver.try_recv() {
-            // let num_found = targets.iter().count();
-            // if num_found > 0 {
-            //     println!("Found {} potential targets", num_found);
-            // }
             current_targets = targets;
         }
 
         window.draw_2d(&e, |c, g, d| {
             piston_window::clear([1.0; 4], g);
             piston_window::image(&tex, c.transform, g);
-            for &g_line in current_targets.iter() {
-                let p_line = gridline_to_piston_line(g_line);
-                piston_window::line(LINE_COLOR, 1.0, p_line, c.transform, g);
+            for &t in current_targets.iter() {
+                //let p_line = gridline_to_piston_line(g_line);
+                let mid_x = t.x_min as f64 + (t.x_max - t.x_min) as f64 / 2.0;
+                let mid_y = t.y_min as f64 + (t.y_max - t.y_min) as f64 / 2.0;
+                let h_line = [t.x_min as f64, mid_y, t.x_max as f64, mid_y];
+                let v_line = [mid_x, t.y_min as f64, mid_x, t.y_max as f64];
+                piston_window::line(LINE_COLOR, 1.0, h_line, c.transform, g);
+                piston_window::line(LINE_COLOR, 1.0, v_line, c.transform, g);
             }
             ctx.encoder.flush(d);
         });
