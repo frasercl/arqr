@@ -1,7 +1,7 @@
-/// Experimental image filters
-/// Written to be dropped into the image display pipeline, not the decoding pipeline.
-/// As such, while they convert to grayscale during the course of computation,
-/// they are generic over any image type to save data and conversion overhead.
+//! Experimental image filters, written to be dropped into the image display
+//! pipeline, not the decoding pipeline. As such, while they convert to
+//! grayscale during the course of computation, they are generic over any image
+//! type to save data and conversion overhead.
 
 use std::ops::{Deref, DerefMut};
 use image::{ImageBuffer, Pixel, Primitive};
