@@ -2,7 +2,8 @@
 //! 
 //! `Bitmap` is based on `image::ImageBuffer`, but has `bool`s for pixels.
 
-// Quite a lot of this file just reimplements `ImageBuffer` and 
+// Quite a lot of this file just reimplements `ImageBuffer` and
+// `slice` iterators. Oh well - it's a good exercise to do!
 
 use std::{ops::Deref, slice, cmp};
 use image::{ImageBuffer, Pixel, Primitive, buffer::ConvertBuffer};
