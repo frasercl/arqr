@@ -1,7 +1,11 @@
 
 use std::{thread, sync::mpsc, path::Path};
 use image::{ImageBuffer, buffer::ConvertBuffer};
-use nokhwa::Camera;
+use nokhwa::{
+    Camera,
+    pixel_format::RgbAFormat,
+    utils::{CameraIndex, RequestedFormat, RequestedFormatType}
+};
 use piston_window::{
     PistonWindow,
     Texture,
@@ -18,7 +22,10 @@ const SCAN_INTERVAL: u32 = 2;
 const LINE_COLOR: [f32; 4] = [0.0, 0.0, 1.0, 1.0];
 
 fn main() {
-    let mut cam = Camera::new(0, None).unwrap();
+    let mut cam = Camera::new(
+        CameraIndex::Index(0),
+        RequestedFormat::new::<RgbAFormat>(RequestedFormatType::None)
+    ).unwrap();
     let res = cam.resolution();
     let width = res.width();
     let height = res.height();
@@ -33,7 +40,8 @@ fn main() {
 
         let mut send_result = Ok(());
         while send_result.is_ok() {
-            let frame = cam.frame().unwrap();
+            let frame_buf = cam.frame().unwrap();
+            let frame = frame_buf.decode_image::<RgbAFormat>().unwrap();
 
             send_result = cam_tx.send(frame.convert());
 
